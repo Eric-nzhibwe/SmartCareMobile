@@ -7,10 +7,10 @@ import {
 import { LinearGradient } from 'expo-linear-gradient';
 import { FontAwesome5 } from '@expo/vector-icons';
 import axios from 'axios';
-import * as SecureStore from 'expo-secure-store';
 import { StackScreenProps } from '@react-navigation/stack';
 import { RootStackParamList } from '../../App';
 import { colors, radius, shadow, font } from '../theme';
+import { storeSession } from '../api';
 
 import { API_BASE } from '../config';
 
@@ -34,9 +34,8 @@ export default function LoginScreen({ navigation }: Props) {
         username: username.trim(),
         password,
       });
-      const { token, user } = response.data;
-      await SecureStore.setItemAsync('token', token);
-      await SecureStore.setItemAsync('user', JSON.stringify(user));
+      const { token, refresh, user } = response.data;
+      await storeSession({ token, refresh, user });
       // Route to the correct role-specific dashboard
       if (user.role === 'admin') navigation.replace('AdminDashboard');
       else if (user.role === 'doctor') navigation.replace('DoctorDashboard');

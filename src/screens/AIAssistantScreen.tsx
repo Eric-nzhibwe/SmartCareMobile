@@ -10,6 +10,7 @@ import * as SecureStore from 'expo-secure-store';
 import { StackScreenProps } from '@react-navigation/stack';
 import { RootStackParamList } from '../../App';
 import { colors, radius, shadow, font } from '../theme';
+import { api } from '../api';
 import { API_BASE } from '../config';
 
 type Props = StackScreenProps<RootStackParamList, 'AIAssistant'>;
@@ -225,7 +226,6 @@ export default function AIAssistantScreen({ navigation, route }: Props) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [inputText, setInputText] = useState('');
   const [sending, setSending]     = useState(false);
-  const [token, setToken]         = useState('');
   const [insightCard, setInsightCard] = useState<InsightCard>({
     title:   cfg.insightLabel,
     content: '',
@@ -238,7 +238,6 @@ export default function AIAssistantScreen({ navigation, route }: Props) {
   const scrollRef = useRef<ScrollView>(null);
 
   useEffect(() => {
-    SecureStore.getItemAsync('token').then(t => { if (t) setToken(t); });
     // Welcome message
     setMessages([{
       id:        '0',
@@ -274,11 +273,7 @@ export default function AIAssistantScreen({ navigation, route }: Props) {
       .map(m => ({ role: m.role, content: m.content }));
 
     try {
-      const res = await axios.post(
-        `${API_BASE}/api/ai/chat`,
-        { messages: history },
-        { headers: { Authorization: `Bearer ${token}` } },
-      );
+      const res = await api.post('/api/ai/chat', { messages: history });
       const reply: Message = {
         id:        (Date.now() + 1).toString(),
         role:      'assistant',
@@ -296,7 +291,7 @@ export default function AIAssistantScreen({ navigation, route }: Props) {
       setSending(false);
       scrollToBottom();
     }
-  }, [inputText, messages, sending, token, scrollToBottom]);
+  }, [inputText, messages, sending, scrollToBottom]);
 
   const loadInsight = useCallback(async () => {
     setInsightCard(c => ({ ...c, loading: true, error: undefined }));
@@ -307,17 +302,14 @@ export default function AIAssistantScreen({ navigation, route }: Props) {
     };
     const endpoint = endpointMap[userRole] || 'doctor-insights';
     try {
-      const res = await axios.get(
-        `${API_BASE}/api/ai/${endpoint}`,
-        { headers: { Authorization: `Bearer ${token}` } },
-      );
+      const res = await api.get(`/api/ai/${endpoint}`);
       const content = res.data.insights || res.data.summary || '';
       setInsightCard(c => ({ ...c, loading: false, content }));
     } catch (err: any) {
       const msg = err?.response?.data?.error || 'Could not load insights';
       setInsightCard(c => ({ ...c, loading: false, error: msg }));
     }
-  }, [token, userRole]);
+  }, [userRole]);
 
   useEffect(() => {
     if (activeTab === 'insights' && !insightCard.content && !insightCard.loading) {
@@ -345,7 +337,7 @@ export default function AIAssistantScreen({ navigation, route }: Props) {
           <Text style={styles.headerTitle}>{cfg.title}</Text>
           <View style={styles.headerStatus}>
             <View style={[styles.statusDot, { backgroundColor: '#22c55e' }]} />
-            <Text style={styles.headerSubtitle}>Powered by Groq · LLaMA 3.3</Text>
+            <Text style={styles.headerSubtitle}>Powered by Groq · GPT-OSS 120B</Text>
           </View>
         </View>
       </View>

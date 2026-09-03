@@ -9,6 +9,7 @@ import * as SecureStore from 'expo-secure-store';
 import { StackScreenProps } from '@react-navigation/stack';
 import { RootStackParamList } from '../../App';
 import { colors, radius, shadow, font } from '../theme';
+import { api, clearSession } from '../api';
 
 import { API_BASE } from '../config';
 
@@ -87,10 +88,7 @@ export default function DoctorDashboardScreen({ navigation }: Props) {
   const load = useCallback(async (showRefresh = false) => {
     if (showRefresh) setRefreshing(true);
     try {
-      const tokenRaw = await SecureStore.getItemAsync('token');
-      const res = await axios.get(`${API_BASE}/api/dashboard`, {
-        headers: { Authorization: `Bearer ${tokenRaw}` },
-      });
+      const res = await api.get('/api/dashboard');
       setData(res.data);
     } catch {
       Alert.alert('Error', 'Unable to load dashboard. Please check your connection.');
@@ -103,8 +101,7 @@ export default function DoctorDashboardScreen({ navigation }: Props) {
   useEffect(() => { load(); }, [load]);
 
   const handleLogout = async () => {
-    await SecureStore.deleteItemAsync('token');
-    await SecureStore.deleteItemAsync('user');
+    await clearSession();
     navigation.replace('Login');
   };
 
