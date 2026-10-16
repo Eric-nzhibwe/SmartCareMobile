@@ -1,19 +1,19 @@
 /**
  * SmartCare API client
  *
- * - Axios instance with base URL and auth header injection
- * - Token refresh interceptor (retries once on 401)
- * - Session helpers used across the app
- * - authEvents EventEmitter for broadcasting SESSION_EXPIRED
+ * Auth is now handled by Firebase. Each request attaches the current user's
+ * Firebase ID token as a Bearer token. The token is refreshed automatically
+ * by the Firebase SDK, so we just fetch a fresh one before every request.
  */
 
 import axios, { AxiosError, InternalAxiosRequestConfig } from 'axios';
 import * as SecureStore from 'expo-secure-store';
 import EventEmitter from 'eventemitter3';
+import { auth } from './firebase';
 import { API_BASE } from './config';
 
 // ── Auth event bus ─────────────────────────────────────────────────────────
-export const authEvents = new EventEmitter();
+export const authEvents    = new EventEmitter();
 export const SESSION_EXPIRED = 'SESSION_EXPIRED';
 
 // ── Axios instance ─────────────────────────────────────────────────────────
@@ -23,74 +23,38 @@ export const api = axios.create({
   headers: { 'Content-Type': 'application/json' },
 });
 
-// ── Request interceptor: attach Bearer token ───────────────────────────────
+// ── Request interceptor: attach fresh Firebase ID token ───────────────────
 api.interceptors.request.use(async (config: InternalAxiosRequestConfig) => {
-  const token = await SecureStore.getItemAsync('token');
-  if (token && config.headers) {
-    config.headers.Authorization = `Bearer ${token}`;
+  const user = auth.currentUser;
+  if (user && config.headers) {
+    // forceRefresh=false — Firebase caches and auto-refreshes the token
+    const idToken = await user.getIdToken(false);
+    config.headers.Authorization = `Bearer ${idToken}`;
   }
   return config;
 });
 
-// ── Response interceptor: silent token refresh on 401 ─────────────────────
-let isRefreshing = false;
-let failedQueue: Array<{
-  resolve: (value: string) => void;
-  reject: (reason?: unknown) => void;
-}> = [];
-
-function processQueue(error: unknown, token: string | null) {
-  failedQueue.forEach(({ resolve, reject }) => {
-    if (error) reject(error);
-    else resolve(token as string);
-  });
-  failedQueue = [];
-}
-
+// ── Response interceptor: handle 401 (force-refresh token once) ───────────
 api.interceptors.response.use(
   response => response,
   async (error: AxiosError) => {
     const originalRequest = error.config as InternalAxiosRequestConfig & { _retry?: boolean };
 
     if (error.response?.status === 401 && !originalRequest._retry) {
-      if (isRefreshing) {
-        // Queue the request until refresh completes
-        return new Promise((resolve, reject) => {
-          failedQueue.push({ resolve, reject });
-        }).then(token => {
-          if (originalRequest.headers) {
-            originalRequest.headers.Authorization = `Bearer ${token}`;
-          }
-          return api(originalRequest);
-        });
-      }
-
       originalRequest._retry = true;
-      isRefreshing = true;
-
       try {
-        const refreshToken = await SecureStore.getItemAsync('refresh_token');
-        if (!refreshToken) throw new Error('No refresh token');
+        const user = auth.currentUser;
+        if (!user) throw new Error('No authenticated user');
 
-        const res = await axios.post(`${API_BASE}/api/token/refresh`, { refresh: refreshToken });
-        const { token, refresh } = res.data;
-
-        await SecureStore.setItemAsync('token', token);
-        await SecureStore.setItemAsync('refresh_token', refresh);
-
-        processQueue(null, token);
-
+        // Force a fresh token from Firebase
+        const idToken = await user.getIdToken(true);
         if (originalRequest.headers) {
-          originalRequest.headers.Authorization = `Bearer ${token}`;
+          originalRequest.headers.Authorization = `Bearer ${idToken}`;
         }
         return api(originalRequest);
-      } catch (refreshError) {
-        processQueue(refreshError, null);
+      } catch {
         await clearSession();
         authEvents.emit(SESSION_EXPIRED);
-        return Promise.reject(refreshError);
-      } finally {
-        isRefreshing = false;
       }
     }
 
@@ -100,38 +64,38 @@ api.interceptors.response.use(
 
 // ── Session helpers ────────────────────────────────────────────────────────
 
-export async function storeSession({
-  token,
-  refresh,
-  user,
-}: {
-  token: string;
-  refresh: string;
-  user: object;
-}) {
-  await Promise.all([
-    SecureStore.setItemAsync('token', token),
-    SecureStore.setItemAsync('refresh_token', refresh),
-    SecureStore.setItemAsync('user', JSON.stringify(user)),
-  ]);
+export type UserProfile = {
+  uid:      string;
+  username: string;
+  role:     'doctor' | 'nurse' | 'admin' | 'patient';
+  facility: string;
+  email:    string;
+};
+
+/** Persist the user profile locally for offline access */
+export async function storeSession({ user }: { user: UserProfile }) {
+  await SecureStore.setItemAsync('user', JSON.stringify(user));
 }
 
+/** Remove local session data (called on logout or session expiry) */
 export async function clearSession() {
-  await Promise.all([
-    SecureStore.deleteItemAsync('token'),
-    SecureStore.deleteItemAsync('refresh_token'),
-    SecureStore.deleteItemAsync('user'),
-  ]);
+  await SecureStore.deleteItemAsync('user');
 }
 
-// ── Token expiry check (local, no network) ─────────────────────────────────
-export function isTokenExpired(token: string): boolean {
+/** Read the locally cached user profile */
+export async function getStoredUser(): Promise<UserProfile | null> {
+  const raw = await SecureStore.getItemAsync('user');
+  if (!raw) return null;
   try {
-    const payload = JSON.parse(atob(token.split('.')[1]));
-    // exp is in seconds; give a 30s buffer
-    return Date.now() / 1000 > payload.exp - 30;
+    return JSON.parse(raw) as UserProfile;
   } catch {
-    // If we can't parse the token, treat it as expired
-    return true;
+    return null;
   }
+}
+
+// ── Token expiry check (kept for compatibility) ────────────────────────────
+export function isTokenExpired(_token: string): boolean {
+  // Firebase handles token refresh automatically — always return false here
+  // so the app doesn't try to do its own JWT parsing on Firebase tokens.
+  return false;
 }

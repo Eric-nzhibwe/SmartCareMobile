@@ -5,7 +5,10 @@
     "skipLibCheck": true,
     "allowSyntheticDefaultImports": true,
     "esModuleInterop": true,
-    "jsx": "react-native"
+    "jsx": "react-native",
+    // React Native 0.76+ ships its own bundled TypeScript types.
+    // @types/react-native is no longer needed or published past 0.73.
+    "types": ["react", "node"]
   },
   "include": ["src/**/*", "App.tsx", "global.d.ts"]
 }

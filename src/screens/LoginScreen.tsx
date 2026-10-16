@@ -1,48 +1,110 @@
 import React, { useState } from 'react';
 import {
-  View, Text, TextInput, TouchableOpacity,
-  StyleSheet, Alert, KeyboardAvoidingView,
-  Platform, ScrollView, ActivityIndicator,
+  View,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  StyleSheet,
+  KeyboardAvoidingView,
+  Platform,
+  ScrollView,
+  ActivityIndicator,
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { FontAwesome5 } from '@expo/vector-icons';
-import axios from 'axios';
+import { signInWithEmailAndPassword } from 'firebase/auth';
+import { doc, getDoc } from 'firebase/firestore';
 import { StackScreenProps } from '@react-navigation/stack';
-import { RootStackParamList } from '../../App';
-import { colors, radius, shadow, font } from '../theme';
-import { storeSession } from '../api';
 
-import { API_BASE } from '../config';
+import { auth, db }           from '../firebase';
+import { storeSession }        from '../api';
+import { RootStackParamList }  from '../../App';
+import { colors, radius, shadow, font } from '../theme';
 
 type Props = StackScreenProps<RootStackParamList, 'Login'>;
 
+/**
+ * Username → Firebase email mapping.
+ * Each role account has a fixed email in Firebase Auth (username@smartcare.app).
+ */
+const USERNAME_TO_EMAIL: Record<string, string> = {
+  doctor: 'doctor@smartcare.app',
+  nurse:  'nurse@smartcare.app',
+  admin:  'admin@smartcare.app',
+};
+
 export default function LoginScreen({ navigation }: Props) {
-  const [username, setUsername] = useState('');
-  const [password, setPassword] = useState('');
-  const [loading, setLoading]   = useState(false);
-  const [error, setError]       = useState('');
+  const [username, setUsername]       = useState('');
+  const [password, setPassword]       = useState('');
+  const [showPassword, setShowPassword] = useState(false);
+  const [loading, setLoading]         = useState(false);
+  const [error, setError]             = useState('');
 
   const handleLogin = async () => {
     setError('');
-    if (!username.trim() || !password) {
+    const trimmed = username.trim().toLowerCase();
+
+    if (!trimmed || !password) {
       setError('Please enter your username and password.');
       return;
     }
+
+    const email = USERNAME_TO_EMAIL[trimmed];
+    if (!email) {
+      setError('Username not recognised. Please check and try again.');
+      return;
+    }
+
     setLoading(true);
     try {
-      const response = await axios.post(`${API_BASE}/api/login`, {
-        username: username.trim(),
-        password,
-      });
-      const { token, refresh, user } = response.data;
-      await storeSession({ token, refresh, user });
-      // Route to the correct role-specific dashboard
-      if (user.role === 'admin') navigation.replace('AdminDashboard');
+      // 1. Sign in with Firebase Auth
+      const credential = await signInWithEmailAndPassword(auth, email, password);
+      const { uid } = credential.user;
+
+      // 2. Fetch the user profile from Firestore
+      const snap = await getDoc(doc(db, 'users', uid));
+      if (!snap.exists()) {
+        setError('User profile not found. Please contact your administrator.');
+        return;
+      }
+
+      const profile = snap.data();
+      const user = {
+        uid,
+        username: profile.username,
+        role:     profile.role,
+        facility: profile.facility ?? 'Ministry of Health',
+        email:    profile.email,
+      };
+
+      // 3. Cache the profile locally
+      await storeSession({ user });
+
+      // 4. Route to the correct dashboard
+      if (user.role === 'admin')       navigation.replace('AdminDashboard');
       else if (user.role === 'doctor') navigation.replace('DoctorDashboard');
-      else if (user.role === 'nurse') navigation.replace('NurseDashboard');
-      else navigation.replace('Dashboard');
+      else if (user.role === 'nurse')  navigation.replace('NurseDashboard');
+      else                             navigation.replace('Dashboard');
+
     } catch (err: any) {
-      setError(err?.response?.data?.error || 'Invalid credentials. Please try again.');
+      // Log the real error code to Metro console for debugging
+      console.error('[Login] Firebase error code:', err?.code, '| message:', err?.message);
+
+      // Map Firebase error codes to friendly messages
+      const code: string = err?.code ?? '';
+      if (code === 'auth/wrong-password' || code === 'auth/invalid-credential') {
+        setError('Incorrect password. Please try again.');
+      } else if (code === 'auth/too-many-requests') {
+        setError('Too many failed attempts. Please wait a moment and try again.');
+      } else if (code === 'auth/network-request-failed') {
+        setError('No network connection. Please check your internet and retry.');
+      } else if (code === 'auth/user-not-found') {
+        setError('No account found for this username.');
+      } else if (code === 'auth/invalid-api-key') {
+        setError('App configuration error. Please contact support.');
+      } else {
+        setError(`Sign in failed (${code || 'unknown'}). Please try again.`);
+      }
     } finally {
       setLoading(false);
     }
@@ -66,7 +128,7 @@ export default function LoginScreen({ navigation }: Props) {
           {/* ── Card ── */}
           <View style={styles.card}>
 
-            {/* ── Logo / Header ── */}
+            {/* ── Logo ── */}
             <View style={styles.logoBlock}>
               <View style={styles.logoIconWrap}>
                 <FontAwesome5 name="hospital" size={32} color={colors.primary} />
@@ -86,7 +148,7 @@ export default function LoginScreen({ navigation }: Props) {
               </View>
               <TextInput
                 style={styles.input}
-                placeholder="Enter username"
+                placeholder="doctor / nurse / admin"
                 placeholderTextColor={colors.text3}
                 value={username}
                 onChangeText={setUsername}
@@ -102,16 +164,29 @@ export default function LoginScreen({ navigation }: Props) {
                 <FontAwesome5 name="lock" size={11} color={colors.text2} />
                 <Text style={styles.labelText}> Password</Text>
               </View>
-              <TextInput
-                style={styles.input}
-                placeholder="Enter password"
-                placeholderTextColor={colors.text3}
-                value={password}
-                onChangeText={setPassword}
-                secureTextEntry
-                returnKeyType="done"
-                onSubmitEditing={handleLogin}
-              />
+              <View style={styles.inputWrapper}>
+                <TextInput
+                  style={styles.inputWithToggle}
+                  placeholder="Enter password"
+                  placeholderTextColor={colors.text3}
+                  value={password}
+                  onChangeText={setPassword}
+                  secureTextEntry={!showPassword}
+                  returnKeyType="done"
+                  onSubmitEditing={handleLogin}
+                />
+                <TouchableOpacity
+                  style={styles.eyeBtn}
+                  onPress={() => setShowPassword(prev => !prev)}
+                  activeOpacity={0.7}
+                >
+                  <FontAwesome5
+                    name={showPassword ? 'eye-slash' : 'eye'}
+                    size={14}
+                    color={colors.text3}
+                  />
+                </TouchableOpacity>
+              </View>
             </View>
 
             {/* ── Error ── */}
@@ -122,7 +197,7 @@ export default function LoginScreen({ navigation }: Props) {
               </View>
             )}
 
-            {/* ── Sign In button ── */}
+            {/* ── Sign In ── */}
             <TouchableOpacity
               style={[styles.btn, loading && styles.btnDisabled]}
               onPress={handleLogin}
@@ -147,20 +222,14 @@ export default function LoginScreen({ navigation }: Props) {
 }
 
 const styles = StyleSheet.create({
-  gradient: {
-    flex: 1,
-  },
-  kav: {
-    flex: 1,
-  },
+  gradient: { flex: 1 },
+  kav:      { flex: 1 },
   scroll: {
     flexGrow: 1,
     justifyContent: 'center',
     alignItems: 'center',
     padding: 20,
   },
-
-  // Card
   card: {
     backgroundColor: colors.surface,
     borderRadius: radius.lg,
@@ -169,8 +238,6 @@ const styles = StyleSheet.create({
     maxWidth: 420,
     ...shadow.lg,
   },
-
-  // Logo
   logoBlock: {
     alignItems: 'center',
     marginBottom: 24,
@@ -199,11 +266,7 @@ const styles = StyleSheet.create({
     color: colors.text3,
     marginTop: 4,
   },
-
-  // Fields
-  field: {
-    marginBottom: 14,
-  },
+  field: { marginBottom: 14 },
   fieldLabel: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -225,8 +288,27 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: colors.text,
   },
-
-  // Error
+  inputWrapper: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: colors.surface,
+    borderColor: colors.border2,
+    borderWidth: 1,
+    borderRadius: radius.sm,
+  },
+  inputWithToggle: {
+    flex: 1,
+    paddingHorizontal: 12,
+    paddingVertical: 11,
+    fontSize: 14,
+    color: colors.text,
+  },
+  eyeBtn: {
+    paddingHorizontal: 12,
+    paddingVertical: 11,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
   errorBox: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -241,8 +323,6 @@ const styles = StyleSheet.create({
     flexShrink: 1,
     lineHeight: 16,
   },
-
-  // Button
   btn: {
     backgroundColor: colors.primary,
     borderRadius: radius.sm,
@@ -252,9 +332,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     marginTop: 4,
   },
-  btnDisabled: {
-    opacity: 0.7,
-  },
+  btnDisabled: { opacity: 0.7 },
   btnText: {
     color: colors.white,
     fontSize: 14,

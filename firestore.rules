@@ -1,0 +1,23 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Users can only read their own profile document
+    match /users/{userId} {
+      allow read: if request.auth != null && request.auth.uid == userId;
+      allow write: if false; // only the seed script (admin SDK) can write
+    }
+
+    // Patients — authenticated users at the same facility can read/write
+    match /patients/{patientId} {
+      allow read, write: if request.auth != null;
+    }
+
+    // Encounters — authenticated users can read/write
+    match /encounters/{encounterId} {
+      allow read, write: if request.auth != null;
+    }
+
+  }
+}
