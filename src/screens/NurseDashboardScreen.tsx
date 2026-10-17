@@ -4,16 +4,13 @@ import {
   RefreshControl, Alert, StatusBar, ActivityIndicator,
 } from 'react-native';
 import { FontAwesome5 } from '@expo/vector-icons';
-import axios from 'axios';
-import * as SecureStore from 'expo-secure-store';
-import { StackScreenProps } from '@react-navigation/stack';
-import { RootStackParamList } from '../../App';
+import { DrawerScreenProps } from '@react-navigation/drawer';
 import { colors, radius, shadow, font } from '../theme';
 import { api, clearSession } from '../api';
 
 import { API_BASE } from '../config';
 
-type Props = StackScreenProps<RootStackParamList, 'NurseDashboard'>;
+type Props = DrawerScreenProps<any, any>;
 
 type NurseStats = {
   total_patients: number;
@@ -123,7 +120,7 @@ export default function NurseDashboardScreen({ navigation }: Props) {
 
   const handleLogout = async () => {
     await clearSession();
-    navigation.replace('Login');
+    navigation.getParent()?.reset({ index: 0, routes: [{ name: 'Login' }] });
   };
 
   if (loading) {
